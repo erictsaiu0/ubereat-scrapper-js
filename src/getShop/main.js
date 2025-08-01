@@ -6,6 +6,7 @@ import { Logger } from "../lib/Logger.js";
 const date = new Date();
 const TODAY = `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
 const logger = new Logger(`./${TODAY}.log`);
+const CSV_NAME = (Bun?.argv ?? process.argv)[2] || "tw_points.csv";
 
 async function main() {
   const PATH = `../../../uber_data/shopLst/${TODAY}`;
@@ -19,7 +20,7 @@ async function main() {
   }
 
   // read central location information
-  const centerStream = await readCSV("../../inputCentral/tw_points.csv", {
+  const centerStream = await readCSV(`../../inputCentral/${CSV_NAME}`, {
     header: true,
   });
   let centerLst = centerStream.loc({
