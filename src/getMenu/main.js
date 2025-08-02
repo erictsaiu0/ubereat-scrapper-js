@@ -81,8 +81,21 @@ async function main() {
   logger.info("down shop catch");
 }
 
-try {
-  main();
-} catch (e) {
-  logger.error(`Totally failed ${e}`);
-}
+const startTime = Date.now();
+logger.log("Start executing getShop script at " + new Date().toLocaleString());
+
+main()
+  .then(() => {
+    const endTime = Date.now();
+    const executionTimeSec = (endTime - startTime) / 1000;
+    function formatTime(sec) {
+      const hrs = Math.floor(sec / 3600);
+      const mins = Math.floor((sec % 3600) / 60);
+      const secs = Math.floor(sec % 60);
+      return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+    logger.log(`Finished executing. Total execution time: ${formatTime(executionTimeSec)}.`);
+  })
+  .catch((e) => {
+    logger.error("Totally failed", e);
+  });

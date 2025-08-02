@@ -6,7 +6,6 @@ import { Logger } from "../lib/Logger.js";
 const date = new Date();
 const TODAY = `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
 const logger = new Logger(`./${TODAY}.log`);
-const CSV_NAME = (Bun?.argv ?? process.argv)[2] || "tw_points.csv";
 
 async function main() {
   const PATH = `../../../uber_data/shopLst/${TODAY}`;
@@ -20,7 +19,7 @@ async function main() {
   }
 
   // read central location information
-  const centerStream = await readCSV(`../../inputCentral/${CSV_NAME}`, {
+  const centerStream = await readCSV("../../inputCentral/tw_points.csv", {
     header: true,
   });
   let centerLst = centerStream.loc({
@@ -38,7 +37,9 @@ async function main() {
     }).values,
   );
 
-  for (const loc of centerLst) {
+  for (let i = 0; i < centerLst.length; i++) {
+    const loc = centerLst[i];
+    logger.log(`Processing location ${i + 1} of ${centerLst.length}: [${loc[0]}, ${loc[1]}]`);
     try {
       await getNearShop(TODAY, loc[0], loc[1], date.getDate() == 10, logger);
     } catch (e) {
@@ -49,8 +50,21 @@ async function main() {
   logger.log("down shop catch");
 }
 
-try {
-  main();
-} catch (e) {
-  logger.error("Totally failed");
-}
+const startTime = Date.now();
+logger.log("Start executing getShop script at " + new Date().toLocaleString());
+
+main()
+  .then(() => {
+    const endTime = Date.now();
+    const executionTimeSec = (endTime - startTime) / 1000;
+    function formatTime(sec) {
+      const hrs = Math.floor(sec / 3600);
+      const mins = Math.floor((sec % 3600) / 60);
+      const secs = Math.floor(sec % 60);
+      return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+    logger.log(`Finished executing. Total execution time: ${formatTime(executionTimeSec)}.`);
+  })
+  .catch((e) => {
+    logger.error("Totally failed", e);
+  });
