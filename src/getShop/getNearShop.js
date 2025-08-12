@@ -28,7 +28,8 @@ export default async function getNearShop(
     anchor_longitude: [],
     score_breakdown: [],
     score_total: [],
-    rating: [],
+    rate: [],
+    rateCt: [],
     orderable: [],
   };
   let cookie = new Cookie();
@@ -106,9 +107,16 @@ export default async function getNearShop(
 
         try {
           let rating = store["rating"]["text"];
-          result.rating.push(rating);
+          result.rate.push(rating);
         } catch (e) {
-          result.rating.push(NaN);
+          result.rate.push(NaN);
+        }
+
+        try {
+          let rateCt = store["tracking"]["storePayload"]["ratingInfo"]["ratingCount"];
+          result.rateCt.push(rateCt);
+        } catch (e) {
+          result.rateCt.push(NaN);
         }
 
         // the scores seems do something on the sorting order
