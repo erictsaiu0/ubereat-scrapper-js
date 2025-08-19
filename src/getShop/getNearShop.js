@@ -114,7 +114,7 @@ export default async function getNearShop(
 
         try {
           let rateCt = store["tracking"]["storePayload"]["ratingInfo"]["ratingCount"];
-          result.rateCt.push(rateCt);
+            result.rateCt.push(rateCt.toString().replace(/,/g, ''));
         } catch (e) {
           result.rateCt.push(NaN);
         }
