@@ -108,8 +108,8 @@ export class Cookie {
 		return ret;
 	}
 
-	print() {
-		let values = Object.values(this.cookies);
-		for (const v of values) console.log(v);
-	}
+	// print() {
+	// 	let values = Object.values(this.cookies);
+	// 	for (const v of values) console.log(v);
+	// }
 }

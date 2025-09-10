@@ -25,7 +25,7 @@ export default async function getMenu(
 ) {
   let get = await fetch(
     "https://www.ubereats.com/tw/feed?diningMode=DELIVERY",
-    { vervose: true },
+    // { verbose: true },
   );
   cookie.updateCookies(get.headers.getSetCookie().join("; "));
   cookie.setCookie("mcd_restaurant", "");
@@ -33,7 +33,7 @@ export default async function getMenu(
   let now = new Date();
 
   // fetch logic
-  await new Promise((resolve) => setTimeout(resolve, Math.random() * 3000));
+  await new Promise((resolve) => setTimeout(resolve, Math.random() * 5000));
   try {
     let response = await sendReqMenu(
       cookie,
@@ -49,7 +49,7 @@ export default async function getMenu(
       const jsonPath = `../../../uber_data/uber_menu/json/${today}`;
       mkdirSync(jsonPath, { recursive: true });
       writeFileSync(
-        `${jsonPath}/${today}/${latitude}_${longitude}_${shopUuid}-${today}.json`,
+        `${jsonPath}/${latitude}_${longitude}_${shopUuid}-${today}.json`,
         JSON.stringify(data),
       );
     }

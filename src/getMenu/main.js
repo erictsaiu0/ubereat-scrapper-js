@@ -1,6 +1,7 @@
+// main.js
 import getMenu from "./getMenu.js";
 import { Cookie } from "./Cookie.js";
-import { mkdirSync, readdirSync } from "fs";
+import { mkdirSync, readdirSync, existsSync } from "fs";
 import { readCSV } from "danfojs-node";
 import { DataFrame } from "danfojs-node";
 import { Logger } from "../lib/Logger.js";
@@ -9,151 +10,144 @@ const date = new Date();
 const TODAY = `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
 const logger = new Logger(`./${TODAY}_menu.log`);
 
-async function main() {
-  const PATH = `../../../uber_data/uber_menu/${TODAY}`;
+// 路徑設定
+const SHOP_ROOT = `../../../uber_data/shopLst/${TODAY}`;
+const ROLLING_CSV = `${SHOP_ROOT}/rolling.csv`;
+const MENU_DIR = `../../../uber_data/uber_menu/${TODAY}`;
+mkdirSync(SHOP_ROOT, { recursive: true });
+mkdirSync(MENU_DIR, { recursive: true });
 
-  // 確保輸出目錄存在
-  try {
-    mkdirSync(PATH, { recursive: true });
-  } catch (e) {}
+/**
+ * Phase 1:
+ * 掃描 shopLst/${TODAY} 底下所有 CSV，彙整唯一店家到 rolling.csv
+ * - 依 storeUuid 去重（跨所有來源檔）
+ * - 保留「首次出現」的資料
+ * - 另外加入一欄 `location`（來源檔名），供 Phase 2 分組輸出檔名使用
+ */
+async function buildRollingCSV() {
+  const files = readdirSync(SHOP_ROOT).filter(f => f.toLowerCase().endsWith(".csv"));
 
-  // 來源店家列表（多個地區 CSV）
-  const locationPath = `../../../uber_data/shopLst/${TODAY}`;
-  let locationLst = readdirSync(locationPath)
-    .filter((f) => f.toLowerCase().endsWith(".csv")); // 排除非 CSV 檔
+  const seen = new Set();
+  const out = []; // [storeUuid, name, anchor_latitude, anchor_longitude, location]
 
-  const menuPath = `../../../uber_data/uber_menu/${TODAY}`;
+  for (const f of files) {
+    try {
+      const df = await readCSV(`${SHOP_ROOT}/${f}`);
+      const cols = ["storeUuid", "name", "anchor_latitude", "anchor_longitude"];
+      const values = df.loc({ columns: cols }).values;
 
-  // init cookie
-  let cookie = new Cookie();
+      for (const row of values) {
+        const [uuid, name, lat, lng] = row;
+        if (!uuid) continue;
+        if (seen.has(uuid)) continue; // 去重：跨所有來源檔
+        seen.add(uuid);
+        out.push([uuid, name, lat, lng, f]); // 增加來源檔名欄位 location=f
+      }
+      logger.info(`Scanned ${f}: ${values.length} rows → ${out.length} unique so far.`);
+    } catch (e) {
+      logger.error(`Failed to read or parse ${f}: ${e}`);
+    }
+  }
+
+  const dfOut = new DataFrame(out, {
+    columns: ["storeUuid", "name", "anchor_latitude", "anchor_longitude", "location"],
+  });
+  await dfOut.toCSV({ filePath: ROLLING_CSV, header: true });
+  logger.info(`Wrote rolling.csv with ${out.length} unique stores at ${ROLLING_CSV}`);
+}
+
+/**
+ * Phase 2:
+ * 依 rolling.csv 的 `location` 欄位分組，逐組爬 menu，並維持原本的輸出命名：
+ *   uber_data/uber_menu/${TODAY}/${location}_${TODAY}.csv
+ *
+ * 注意：
+ * - 這裡不再做跨檔去重，因為 rolling.csv 已經完成去重
+ * - 每個 location 會產生一個對應輸出檔
+ */
+async function crawlFromRolling() {
+  // init cookie（沿用既有流程）
+  const cookie = new Cookie();
   cookie.init();
 
-  // 全域去重：跨所有地區檔案，共用一個 Set，避免重複爬同一家店
-  const seenStoreUuids = new Set();
+  // 讀 rolling.csv
+  const df = await readCSV(ROLLING_CSV);
+  const rows = df.loc({
+    columns: ["storeUuid", "name", "anchor_latitude", "anchor_longitude", "location"],
+  }).values;
 
-  for (const location of locationLst) {
-    logger.info(`Processing file: ${location}`);
+  // 依 location 分組
+  const groups = new Map();
+  for (const row of rows) {
+    const [uuid, name, lat, lng, location] = row;
+    if (!uuid) continue;
+    if (!groups.has(location)) groups.set(location, []);
+    groups.get(location).push([uuid, name, lat, lng]);
+  }
 
-    // 讀取店家資料
-    let df;
-    try {
-      df = await readCSV(`${locationPath}/${location}`);
-    } catch (e) {
-      logger.error(`Failed to read ${location}: ${e}`);
-      continue;
-    }
+  logger.info(`Start crawling ${rows.length} shops from rolling.csv across ${groups.size} locations`);
 
-    // 只取需要的欄位
-    let rows = [];
-    try {
-      rows = df
-        .loc({
-          columns: ["storeUuid", "name", "anchor_latitude", "anchor_longitude"],
-        })
-        .values;
-    } catch (e) {
-      logger.error(`Columns missing in ${location}: ${e}`);
-      continue;
-    }
-
-    const before = rows.length;
-
-    // 依 storeUuid 去重（跨檔案）
-    const uniqueRows = [];
-    for (const row of rows) {
-      const [storeUuid] = row;
-      if (!storeUuid) continue;
-      if (seenStoreUuids.has(storeUuid)) continue;
-      seenStoreUuids.add(storeUuid);
-      uniqueRows.push(row);
-    }
-
-    const after = uniqueRows.length;
-    if (after === 0) {
-      logger.info(`Skip ${location}: all ${before} shops already processed by previous files.`);
-      // 仍然產生一個空的輸出檔，或直接 continue。視你的需求：
-      // continue;
-    } else {
-      const lat = uniqueRows[0][2];
-      const lng = uniqueRows[0][3];
-      logger.info(`(${lat}, ${lng}): ${after} unique shops (filtered from ${before})`);
-    }
-
-    // 逐店爬取
+  // 逐 location 處理並輸出
+  for (const [location, list] of groups.entries()) {
     const stores = [];
-    for (const row of uniqueRows) {
-      logger.info(row);
+    logger.info(`Processing group: ${location} (${list.length} shops)`);
+
+    for (const [uuid, name, lat, lng] of list) {
       try {
-        stores.push(
-          await getMenu(
-            cookie,
-            row[0], // storeUuid
-            row[1], // name
-            row[2], // anchor_latitude
-            row[3], // anchor_longitude
-            date.getDate() >= 10 && date.getDate() < 17,
-            logger,
-          ),
-        );
+        const data = await getMenu(cookie, uuid, name, lat, lng, true, logger);
+        stores.push(data);
       } catch (e) {
-        // 失敗則最多重試三次（補上 logger 參數）
-        let cnt = 0;
-        while (cnt < 3) {
-          cnt += 1;
+        // 最多三次重試
+        let ok = false;
+        for (let i = 0; i < 3 && !ok; i++) {
           try {
-            stores.push(
-              await getMenu(
-                cookie,
-                row[0],
-                row[1],
-                row[2],
-                row[3],
-                date.getDate() >= 10 && date.getDate() < 17,
-                logger,
-              ),
-            );
-            break;
+            const data = await getMenu(cookie, uuid, name, lat, lng, true, logger);
+            stores.push(data);
+            ok = true;
           } catch (er) {
-            logger.error(er);
+            logger.error(`Retry ${i + 1} for ${uuid} failed: ${er}`);
           }
         }
-        if (cnt >= 3) {
-          logger.error(`Failed after retries for store ${row[0]} (${row[1]})`);
-        }
+        if (!ok) logger.error(`Failed after retries for store ${uuid} (${name})`);
       }
+      console.log(`  Completed ${stores.length}/${list.length} for ${location}`); // 進度回報
     }
+    console.log(`Completed group: ${location}, total successful: ${stores.length}`);
 
-    // 輸出本檔案對應的結果（僅包含「去重後」實際爬到的店）
+    // 維持原本的命名規則：${location}_${TODAY}.csv
     try {
       const result = new DataFrame(stores);
-      await result.toCSV({
-        filePath: `${menuPath}/${location}_${TODAY}.csv`,
-        header: true,
-      });
-      logger.info(`Wrote ${stores.length} rows to ${menuPath}/${location}_${TODAY}.csv`);
+      const outFile = `${MENU_DIR}/${location}_${TODAY}.csv`;
+      await result.toCSV({ filePath: outFile, header: true });
+      logger.info(`Wrote ${stores.length} rows to ${outFile}`);
     } catch (e) {
       logger.error(`Failed to write CSV for ${location}: ${e}`);
     }
   }
 
-  logger.info("done shop menu crawl");
+  logger.info("done shop menu crawl (from rolling.csv)");
 }
 
+async function main() {
+  // 若尚無 rolling.csv，先建；若已存在就直接用（避免重掃）
+  if (!existsSync(ROLLING_CSV)) {
+    await buildRollingCSV();
+  } else {
+    logger.info(`Found existing ${ROLLING_CSV}, skip rebuild.`);
+  }
+  await crawlFromRolling();
+}
+
+// 執行與計時
 const startTime = Date.now();
 logger.log("Start executing getMenu script at " + new Date().toLocaleString());
-
 main()
   .then(() => {
     const endTime = Date.now();
-    const executionTimeSec = (endTime - startTime) / 1000;
-    function formatTime(sec) {
-      const hrs = Math.floor(sec / 3600);
-      const mins = Math.floor((sec % 3600) / 60);
-      const secs = Math.floor(sec % 60);
-      return `${hrs.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-    }
-    logger.log(`Finished executing. Total execution time: ${formatTime(executionTimeSec)}.`);
+    const sec = Math.floor((endTime - startTime) / 1000);
+    const h = String(Math.floor(sec / 3600)).padStart(2, "0");
+    const m = String(Math.floor((sec % 3600) / 60)).padStart(2, "0");
+    const s = String(sec % 60).padStart(2, "0");
+    logger.log(`Finished. Total execution time: ${h}:${m}:${s}.`);
   })
-  .catch((e) => {
-    logger.error("Totally failed", e);
-  });
+  .catch((e) => logger.error("Totally failed", e));

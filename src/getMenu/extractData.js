@@ -1,16 +1,8 @@
+// extractData.js
 import { Logger } from "../lib/Logger.js";
 import getMenuData from "./extractMenu.js";
 
-/**
- * The function is used to extract data from given data
- * @param {Object} data
- * @param {Date} now
- * @param {number} latitude
- * @param {number} longitude
- * @param {Logger} logger
- */
 export default function extractData(data, now, latitude, longitude, logger) {
-  // setup result
   let result = {
     shopCode: NaN,
     localtion: `"${JSON.stringify([latitude, longitude])}"`,
@@ -29,86 +21,101 @@ export default function extractData(data, now, latitude, longitude, logger) {
     catLst: NaN,
     chain: NaN,
     menu: NaN,
+    popular: NaN,
   };
 
-  // uuid and title
+  // === 原本：uuid / title ===
   try {
     result.shopCode = data.uuid;
-    result.shopName = `"${data.title}"`;
+    if (data.title !== undefined) result.shopName = `"${data.title}"`;
   } catch (e) {
     return;
   }
 
-  // location data
+  // === 原本：location（照舊，讀到什麼就寫什麼；允許空字串） ===
   try {
-    let loc = data.location;
-    result.address = `"${loc.address}"`;
-    result.postalCode = loc.postalCode ? `"${loc.postalCode}"` : NaN;
-    result.city = `"${loc.city}"`;
-    result.shopLat = loc.latitude;
-    result.shopLng = loc.longitude;
-  } catch (e) {
-    // console.error(`${data.uuid} has no location info`);
-  }
+    const loc = data.location || {};
+    if (loc.address !== undefined) result.address = `"${loc.address}"`;
+    if (loc.postalCode !== undefined) result.postalCode = `"${loc.postalCode}"`;
+    if (loc.city !== undefined) result.city = `"${loc.city}"`;
+    if (loc.latitude !== undefined) result.shopLat = loc.latitude;
+    if (loc.longitude !== undefined) result.shopLng = loc.longitude;
+  } catch (e) {}
 
-  // waiting-time
-  try {
-    result.pickupTime = `"${data.etaRange.text}"`;
-  } catch (e) {
-    // console.error(`${data.uuid} has no waiting-time info`);
-  }
+  // === 原本：等候時間 / 外送費（照舊） ===
+  try { if (data.etaRange?.text !== undefined) result.pickupTime = `"${data.etaRange.text}"`; } catch (e) {}
+  try { if (data.fareBadge?.text !== undefined) result.deliverFee = `"${data.fareBadge.text}"`; } catch (e) {}
 
-  // delivery fee
+  // === 原本：rating；reviewCount 保留字串 ===
   try {
-    result.deliverFee = `"${data.fareBadge.text}"`;
-  } catch (e) {
-    // console.error(`${data.uuid} has no delivery-fee info`);
-  }
+    if (data.rating?.ratingValue !== undefined) result.rate = data.rating.ratingValue;
+    if (data.rating?.reviewCount !== undefined) result.rateCt = `${data.rating.reviewCount}`;
+  } catch (e) {}
 
-  // rating
+  // === 小補強：營業狀態兩種鍵名擇一 ===
   try {
-    result.rate = data.rating.ratingValue;
-    result.rateCt = data.rating.reviewCount;
-  } catch (e) {
-    // console.error(`${data.uuid} has no rating`);
-  }
+    const meta = data.storeInfoMetadata || {};
+    const a = meta.storeAvailabilityStatus?.state;
+    const b = meta.storeAvailablityStatus?.state;
+    if (a !== undefined) result.storeAvailabilityStatus = a;
+    else if (b !== undefined) result.storeAvailabilityStatus = b;
+  } catch (e) {}
 
-  // store available?
-  try {
-    result.storeAvailabilityStatus =
-      data.storeInfoMetadata.storeAvailabilityStatus.state;
-  } catch (e) {
-    // console.error(`${data.uuid} has no availability`);
-  }
+  // === 原本：categories / chain（照舊） ===
+  try { result.catLst = Buffer.from(JSON.stringify(data.categories)).toString("base64"); } catch (e) {}
+  try { result.chain = Buffer.from(JSON.stringify(data.parentChain)).toString("base64"); } catch (e) {}
 
-  // categories
+  // === 原本：menu → base64（新版 getMenuData 內含 preDiscountPrice/popularityLabel/rating） ===
   try {
-    // encoded as base64
-    result.catLst = Buffer.from(JSON.stringify(data.categories)).toString(
-      "base64",
-    );
-  } catch (e) {
-    // console.error(`${data.uuid} has no categories`);
-  }
+    const menu = getMenuData(data, logger)
+    // console.log(menu);
+    result.menu = Buffer.from(JSON.stringify(menu)).toString("base64"); 
+  } catch (e) { logger?.error?.(e); }
 
-  // chain
-  try {
-    result.chain = Buffer.from(JSON.stringify(data.parentChain)).toString(
-      "base64",
-    );
-  } catch (e) {
-    // console.error(`${data.uuid} may not have a chain or something's wrong`);
-  }
+  // === 原本：popular（店家層的「人氣區塊」保留舊行為，如後續要移除可再告訴我） ===
+  // try {
+  //   const popular = [];
+  //   const sectionsMap = data?.catalogSectionsMap || {};
+  //   Object.keys(sectionsMap).forEach((topKey) => {
+  //     const sections = sectionsMap[topKey] || [];
+  //     sections.forEach((section) => {
+  //       const payload = section?.payload?.standardItemsPayload;
+  //       if (!payload) return;
+  //       const blockTitle = payload?.title?.text || "";
+  //       if (!/人氣|精選|popular/i.test(blockTitle)) return;
 
-  // menu
-  try {
-    // encoded as base64
-    result.menu = Buffer.from(JSON.stringify(getMenuData(data, logger))).toString(
-      "base64",
-    );
-  } catch (e) {
-    logger.error(e);
-  }
+  //       (payload.catalogItems || []).forEach((item) => {
+  //         const endorsement = item?.catalogItemAnalyticsData?.endorsementMetadata;
+  //         let rating = endorsement?.rating ?? null;
+  //         let numRatings = endorsement?.numRatings ?? null;
+
+  //         const labelAcc = item?.labelPrimary?.accessibilityText;
+  //         if ((rating == null || numRatings == null) && labelAcc) {
+  //           const m = String(labelAcc).match(/(\d{1,3})%\s*\((\d+)\)/);
+  //           if (m) {
+  //             rating = rating ?? `${m[1]}%`;
+  //             numRatings = numRatings ?? parseInt(m[2], 10);
+  //           }
+  //         }
+
+  //         popular.push({
+  //           uuid: item?.uuid ?? null,
+  //           title: item?.title ?? null,
+  //           priceCents: item?.price ?? null,
+  //           priceText: item?.priceTagline?.text ?? null,
+  //           endorsementType: endorsement?.endorsementType ?? null,
+  //           rating,
+  //           numRatings,
+  //           sectionTitle: blockTitle || null,
+  //         });
+  //       });
+  //     });
+  //   });
+
+  //   result.popular = popular.length ? Buffer.from(JSON.stringify(popular)).toString("base64") : NaN;
+  // } catch (e) {
+  //   logger?.error?.(e);
+  // }
 
   return result;
 }
