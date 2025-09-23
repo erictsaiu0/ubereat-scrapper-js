@@ -1,7 +1,7 @@
 // main.js
 import getMenu from "./getMenu.js";
 import { Cookie } from "./Cookie.js";
-import { mkdirSync, readdirSync, existsSync } from "fs";
+import { mkdirSync, readdirSync /*, existsSync*/ } from "fs";
 import { readCSV } from "danfojs-node";
 import { DataFrame } from "danfojs-node";
 import { Logger } from "../lib/Logger.js";
@@ -10,29 +10,32 @@ const date = new Date();
 const TODAY = `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
 const logger = new Logger(`./${TODAY}_menu.log`);
 
-// 路徑設定
-const SHOP_ROOT = `../../../uber_data/shopLst/${TODAY}`;
-const ROLLING_CSV = `${SHOP_ROOT}/rolling.csv`;
+// 路徑設定（調整：rolling.csv 固定放在 shopLst 根目錄；來源仍掃描當天子資料夾）
+const SHOP_ROOT = `../../../uber_data/shopLst`;           // ← 根目錄
+const SHOP_TODAY_DIR = `${SHOP_ROOT}/${TODAY}`;           // ← 當天來源
+const ROLLING_CSV = `${SHOP_ROOT}/rolling.csv`;           // ← 固定位置
 const MENU_DIR = `../../../uber_data/uber_menu/${TODAY}`;
+
 mkdirSync(SHOP_ROOT, { recursive: true });
+mkdirSync(SHOP_TODAY_DIR, { recursive: true });
 mkdirSync(MENU_DIR, { recursive: true });
 
 /**
  * Phase 1:
- * 掃描 shopLst/${TODAY} 底下所有 CSV，彙整唯一店家到 rolling.csv
+ * 掃描 shopLst/${TODAY} 底下所有 CSV，彙整唯一店家到 shopLst/rolling.csv（覆蓋）
  * - 依 storeUuid 去重（跨所有來源檔）
  * - 保留「首次出現」的資料
  * - 另外加入一欄 `location`（來源檔名），供 Phase 2 分組輸出檔名使用
  */
 async function buildRollingCSV() {
-  const files = readdirSync(SHOP_ROOT).filter(f => f.toLowerCase().endsWith(".csv"));
+  const files = readdirSync(SHOP_TODAY_DIR).filter(f => f.toLowerCase().endsWith(".csv"));
 
   const seen = new Set();
   const out = []; // [storeUuid, name, anchor_latitude, anchor_longitude, location]
 
   for (const f of files) {
     try {
-      const df = await readCSV(`${SHOP_ROOT}/${f}`);
+      const df = await readCSV(`${SHOP_TODAY_DIR}/${f}`);
       const cols = ["storeUuid", "name", "anchor_latitude", "anchor_longitude"];
       const values = df.loc({ columns: cols }).values;
 
@@ -41,7 +44,7 @@ async function buildRollingCSV() {
         if (!uuid) continue;
         if (seen.has(uuid)) continue; // 去重：跨所有來源檔
         seen.add(uuid);
-        out.push([uuid, name, lat, lng, f]); // 增加來源檔名欄位 location=f
+        out.push([uuid, name, lat, lng, f]); // location=來源檔名
       }
       logger.info(`Scanned ${f}: ${values.length} rows → ${out.length} unique so far.`);
     } catch (e) {
@@ -52,6 +55,8 @@ async function buildRollingCSV() {
   const dfOut = new DataFrame(out, {
     columns: ["storeUuid", "name", "anchor_latitude", "anchor_longitude", "location"],
   });
+
+  // 覆蓋寫入固定位置 shopLst/rolling.csv
   await dfOut.toCSV({ filePath: ROLLING_CSV, header: true });
   logger.info(`Wrote rolling.csv with ${out.length} unique stores at ${ROLLING_CSV}`);
 }
@@ -70,7 +75,7 @@ async function crawlFromRolling() {
   const cookie = new Cookie();
   cookie.init();
 
-  // 讀 rolling.csv
+  // 讀 rolling.csv（固定位置）
   const df = await readCSV(ROLLING_CSV);
   const rows = df.loc({
     columns: ["storeUuid", "name", "anchor_latitude", "anchor_longitude", "location"],
@@ -129,12 +134,8 @@ async function crawlFromRolling() {
 }
 
 async function main() {
-  // 若尚無 rolling.csv，先建；若已存在就直接用（避免重掃）
-  if (!existsSync(ROLLING_CSV)) {
-    await buildRollingCSV();
-  } else {
-    logger.info(`Found existing ${ROLLING_CSV}, skip rebuild.`);
-  }
+  // 每次都重建 rolling.csv（使用當天來源），不再依存在與否跳過
+  await buildRollingCSV();
   await crawlFromRolling();
 }
 
@@ -148,6 +149,6 @@ main()
     const h = String(Math.floor(sec / 3600)).padStart(2, "0");
     const m = String(Math.floor((sec % 3600) / 60)).padStart(2, "0");
     const s = String(sec % 60).padStart(2, "0");
-    logger.log(`Finished. Total execution time: ${h}:${m}:${s}.`);
+    logger.log(`Finished. Total time: ${h}:${m}:${s}`);
   })
-  .catch((e) => logger.error("Totally failed", e));
+  .catch((e) => logger.error(e));

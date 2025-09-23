@@ -1,7 +1,11 @@
+// extractMenu.js
 import { Logger } from "../lib/Logger";
 
 export default function getMenuData(data, logger) {
+  // === 原本流程：先從 catalogSectionsMap 攤平 ===
   const menu = extractMenu(data.catalogSectionsMap);
+
+  // === 維持原本欄位並「增列」必要欄位 ===
   const result = {
     uuid: [],
     product: [],
@@ -11,12 +15,16 @@ export default function getMenuData(data, logger) {
     isSoldOut: [],
     accessibilityText: [],
     popularityLabel: [],     // "most popular" | "popular" | "normal"
-    // rating: [],              // 例如 "96%"；沒有就 NaN
-    id: [],                  // item.uuid
-    tags: [],                
-    variationCode: [],       
+
+    id: [],                  // 直接放 item.uuid
+    tags: [],                // 直接存整串文字（清理後）
+    variationCode: [],       // 目前無資料來源 → NaN
+
+    rating: [],              // 例如 "96%"；抓不到為 NaN（字串）
+    numRating: [],           // 例如 109；抓不到為 NaN（數字）
   };
 
+  // === 原本：逐 item 取欄位 ===
   for (const item of menu) {
     try {
       const uuid = item?.uuid ?? NaN;
@@ -31,14 +39,14 @@ export default function getMenuData(data, logger) {
       // 原價（只解析折價前值）
       const preDiscountPrice = parseOriginalPrice(item);
 
-      // rating（優先 endorsementMetadata.rating，再從 labelPrimary 補抓百分比）
-      // const rating = parseRating(item);
-
       // 人氣標註（依規則）
       const popularityLabel = decidePopularityLabel(item, item?.__sectionTitle);
 
-      // 新增：tags（彙整 → 直接存字串，做清理避免 CSV 格式問題）
+      // tags（彙整 → 直接存字串，做清理避免 CSV 格式問題）
       const tagsStr = collectTagsAsString(item);
+
+      // ★ 新增：rating / numRating（優先 endorsementMetadata → 再從文本補抓）
+      const { rating, numRating } = parseItemRatingAndCount(item);
 
       // === 寫回 ===
       result.uuid.push(uuid);
@@ -49,19 +57,26 @@ export default function getMenuData(data, logger) {
       result.isSoldOut.push(typeof item?.isSoldOut === "boolean" ? item.isSoldOut : NaN);
       result.accessibilityText.push(accText);
       result.popularityLabel.push(popularityLabel);
-      // result.rating.push(rating);
 
-      // 新增欄位
+      // 你之前新增的欄位
       result.id.push(uuid);                 // 直接用品項 uuid
       result.tags.push(strOrNaN(tagsStr));  // 乾淨字串；若空則 NaN
       result.variationCode.push(NaN);       // 目前無變體代碼來源
+
+      // ★ 新增的兩欄
+      result.rating.push(rating != null ? String(rating) : NaN);
+      result.numRating.push(
+        Number.isFinite(numRating) ? numRating : NaN
+      );
     } catch (e) {
       logger?.error?.(e);
     }
   }
+
   return result;
 }
 
+// === 原本：攤平成 items 陣列（維持不變） ===
 function extractMenu(catalogSectionsMap) {
   const sections = Object.values(catalogSectionsMap || {});
   let menuItems = [];
@@ -76,11 +91,15 @@ function extractItems(section) {
       const items = payload?.catalogItems;
       const sectionTitle = payload?.title?.text || "";
       if (!items) return null;
+      // 保留 section 標題供人氣/標籤規則判定（原本就有的輔助欄位）
       return items.map((it) => ({ ...it, __sectionTitle: sectionTitle }));
     })
     .filter(Boolean);
 }
 
+// ========== 以下為輔助解析（僅新增，不影響原本架構） ==========
+
+// 原價解析（優先 labelPrimary.accessibilityText → 次選 priceTagline.textFormat(HTML)）
 function parseOriginalPrice(item) {
   try {
     const acc = item?.labelPrimary?.accessibilityText;
@@ -98,22 +117,6 @@ function parseOriginalPrice(item) {
         // 通常最後一個是原價（刪除線）
         return parseFloat(prices[prices.length - 1].replace(/,/g, ""));
       }
-    }
-  } catch {}
-  return NaN;
-}
-
-// rating：優先 endorsementMetadata.rating；否則從 labelPrimary.accessibilityText 補抓 "96%"
-function parseRating(item) {
-  try {
-    const r1 = item?.catalogItemAnalyticsData?.endorsementMetadata?.rating;
-    if (r1 != null) return String(r1);
-  } catch {}
-  try {
-    const t = item?.labelPrimary?.accessibilityText;
-    if (t) {
-      const m = String(t).match(/(\d{1,3})\s*%/);
-      if (m) return `${m[1]}%`;
     }
   } catch {}
   return NaN;
@@ -155,9 +158,61 @@ function hasMostLikedRankText(item) {
   return false;
 }
 
+// ★ 新增：同時解析 rating 與 numRating
+function parseItemRatingAndCount(item) {
+  // 1) 後端直接提供（最可靠）
+  try {
+    const meta = item?.catalogItemAnalyticsData?.endorsementMetadata;
+    const r = meta?.rating;       // 例如 "96%"
+    const n = meta?.numRatings;   // 例如 109（數字）
+    if (r != null || Number.isFinite(n)) {
+      return {
+        rating: r != null ? String(r) : null,
+        numRating: Number.isFinite(n) ? n : NaN,
+      };
+    }
+  } catch {}
+
+  // 2) 從 labelPrimary.accessibilityText 或縮圖標籤補抓 "96% (109)"
+  //    常見在 labelPrimary.accessibilityText，或 itemThumbnailElements[].payload.labelPayload.label.accessibilityText
+  const texts = [];
+  try { if (item?.labelPrimary?.accessibilityText) texts.push(item.labelPrimary.accessibilityText); } catch {}
+  try {
+    if (Array.isArray(item?.itemThumbnailElements)) {
+      for (const el of item.itemThumbnailElements) {
+        const acc = el?.payload?.labelPayload?.label?.accessibilityText;
+        if (acc) texts.push(acc);
+      }
+    }
+  } catch {}
+
+  for (const t of texts) {
+    try {
+      const s = String(t);
+      const m1 = s.match(/(\d{1,3})\s*%/);     // 96%
+      const m2 = s.match(/\((\d+)\)/);         // (109)
+      const rating = m1 ? `${m1[1]}%` : null;
+      const numRating = m2 ? parseInt(m2[1], 10) : NaN;
+      if (rating || Number.isFinite(numRating)) {
+        return { rating, numRating };
+      }
+    } catch {}
+  }
+
+  return { rating: null, numRating: NaN };
+}
+
 // 收集 tags 為「單一字串」，並清理以避免 CSV 儲存問題
 function collectTagsAsString(item) {
   const list = [];
+
+  // 若該品項所在區塊是 人氣/精選/Popular，就塞入「人氣精選」
+  try {
+    const sectionTitle = item?.__sectionTitle || "";
+    if (/人氣|精選|popular/i.test(sectionTitle)) {
+      list.push("人氣精選");
+    }
+  } catch {}
 
   try {
     const t1 = item?.endorsement?.text;
@@ -187,6 +242,7 @@ function collectTagsAsString(item) {
     }
   } catch {}
 
+  // 去重、清理、串接
   const uniq = Array.from(new Set(list.map(cleanTagPiece))).filter(Boolean);
   const joined = uniq.join(" | ");
   return cleanForCsv(joined);
