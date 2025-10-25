@@ -4,7 +4,7 @@ import { mkdirSync } from "fs";
 import { Logger } from "../lib/Logger.js";
 
 const date = new Date();
-const TODAY = `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+const TODAY = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 const logger = new Logger(`./${TODAY}.log`);
 
 async function main() {
