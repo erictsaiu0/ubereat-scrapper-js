@@ -7,7 +7,7 @@ import { DataFrame } from "danfojs-node";
 import { Logger } from "../lib/Logger.js";
 
 const date = new Date();
-const TODAY = `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+const TODAY = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 const logger = new Logger(`./${TODAY}_menu.log`);
 
 // 路徑設定（調整：rolling.csv 固定放在 shopLst 根目錄；來源仍掃描當天子資料夾）
