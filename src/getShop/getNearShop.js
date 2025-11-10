@@ -31,6 +31,7 @@ export default async function getNearShop(
     rate: [],
     rateCt: [],
     orderable: [],
+    promotioninfo: [],
   };
   let cookie = new Cookie();
   cookie.init();
@@ -135,6 +136,20 @@ export default async function getNearShop(
           result.orderable.push(orderable);
         } catch (e) {
           result.orderable.push(NaN);
+        }
+
+        try {
+          const signposts = store["signposts"];
+          if (!signposts || signposts.length === 0) {
+            result.promotioninfo.push(null);
+          } else {
+            const texts = signposts
+              .map((item) => item && item["text"])
+              .filter((text) => text);
+            result.promotioninfo.push(texts.length > 0 ? texts.join(" | ") : null);
+          }
+        } catch (e) {
+          result.promotioninfo.push(null);
         }
       }
     } catch (error) {
