@@ -145,7 +145,8 @@ export default async function getNearShop(
           } else {
             const texts = signposts
               .map((item) => item && item["text"])
-              .filter((text) => text);
+              .filter((text) => text)
+              .map((text) => text.replace(/,/g, ""));
             result.promotioninfo.push(texts.length > 0 ? texts.join(" | ") : null);
           }
         } catch (e) {
