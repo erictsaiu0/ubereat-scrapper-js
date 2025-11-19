@@ -140,13 +140,18 @@ export default async function getNearShop(
 
         try {
           const signposts = store["signposts"];
-          if (!signposts || signposts.length === 0) {
+          if (!Array.isArray(signposts) || signposts.length === 0) {
             result.promotioninfo.push(null);
           } else {
             const texts = signposts
               .map((item) => item && item["text"])
-              .filter((text) => text)
-              .map((text) => text.replace(/,/g, ""));
+              .filter((text) => text != null)
+              .map((text) =>
+          text
+            .toString()
+            .replace(/[,\uFF0C]/g, "") // remove ASCII comma and fullwidth comma (，)
+            .trim(),
+              );
             result.promotioninfo.push(texts.length > 0 ? texts.join(" | ") : null);
           }
         } catch (e) {
