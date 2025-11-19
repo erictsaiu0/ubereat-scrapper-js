@@ -32,6 +32,9 @@ export default async function getNearShop(
     rateCt: [],
     orderable: [],
     promotioninfo: [],
+    minDelTime: [],
+    minFee: [],
+    hasServiceFee: [],
   };
   let cookie = new Cookie();
   cookie.init();
@@ -136,6 +139,76 @@ export default async function getNearShop(
           result.orderable.push(orderable);
         } catch (e) {
           result.orderable.push(NaN);
+        }
+
+        try {
+          let minTime = NaN;
+          const dropoffRange =
+            store["tracking"]["storePayload"]["etdInfo"]["dropoffETARange"];
+          if (dropoffRange) {
+            if (typeof dropoffRange["min"] === "number") {
+              minTime = dropoffRange["min"];
+            } else if (typeof dropoffRange["raw"] === "number") {
+              minTime = dropoffRange["raw"];
+            }
+          }
+          if (Number.isNaN(minTime)) {
+            const meta = store["meta"];
+            if (Array.isArray(meta)) {
+              const etdMeta = meta.find(
+                (entry) => entry && entry["badgeType"] === "ETD",
+              );
+              if (etdMeta && typeof etdMeta["text"] === "string") {
+                const match = etdMeta["text"].match(/\d+/);
+                if (match) minTime = Number(match[0]);
+              }
+            }
+          }
+          result.minDelTime.push(minTime);
+        } catch (e) {
+          result.minDelTime.push(NaN);
+        }
+
+        try {
+          let minFee = null;
+          const meta = store["meta"];
+          if (Array.isArray(meta)) {
+            const fareMeta = meta.find(
+              (entry) => entry && entry["badgeType"] === "FARE",
+            );
+            if (fareMeta) {
+              const feeFromBadge = fareMeta?.badgeData?.fare?.deliveryFee;
+              minFee =
+                typeof feeFromBadge === "string" && feeFromBadge.length > 0
+                  ? feeFromBadge
+                  : typeof fareMeta["text"] === "string"
+                    ? fareMeta["text"]
+                    : null;
+              if (typeof minFee === "string") {
+                minFee = minFee.replace(/\s+/g, " ").trim();
+              }
+            }
+          }
+          result.minFee.push(minFee);
+        } catch (e) {
+          result.minFee.push(null);
+        }
+
+        try {
+          let hasFee = NaN;
+          const fareInfo = store["tracking"]["storePayload"]["fareInfo"];
+          if (fareInfo) {
+            const serviceFee = fareInfo["serviceFee"];
+            const actual = fareInfo["actualServiceFee"];
+            hasFee =
+              (typeof serviceFee === "number" && serviceFee > 0) ||
+              (actual &&
+                ((typeof actual["high"] === "number" && actual["high"] > 0) ||
+                  (typeof actual["low"] === "number" && actual["low"] > 0)));
+          }
+          result.hasServiceFee.push(hasFee);
+        } catch (e) {
+          result.hasServiceFee.push(NaN);
         }
 
         try {
