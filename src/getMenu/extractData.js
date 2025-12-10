@@ -22,6 +22,7 @@ export default function extractData(data, now, latitude, longitude, logger) {
     chain: NaN,
     menu: NaN,
     popular: NaN,
+    FBRN: NaN,
   };
 
   // === 原本：uuid / title ===
@@ -45,6 +46,13 @@ export default function extractData(data, now, latitude, longitude, logger) {
   // === 原本：等候時間 / 外送費（照舊） ===
   try { if (data.etaRange?.text !== undefined) result.pickupTime = `"${data.etaRange.text}"`; } catch (e) {}
   try { if (data.fareBadge?.text !== undefined) result.deliverFee = `"${data.fareBadge.text}"`; } catch (e) {}
+
+  // === 新增：食品業者登錄字號（允許保留編號中的連字號） ===
+  try {
+    const badgeText = data?.disclaimerBadge?.text;
+    const fbrn = extractFbrnFromDisclaimer(badgeText);
+    if (fbrn) result.FBRN = `"${fbrn}"`;
+  } catch (e) {}
 
   // === 原本：rating；reviewCount 保留字串 ===
   try {
@@ -118,4 +126,18 @@ export default function extractData(data, now, latitude, longitude, logger) {
   // }
 
   return result;
+}
+
+function extractFbrnFromDisclaimer(text) {
+  if (!text) return null;
+  const plain = stripHtml(String(text));
+  const match = plain.match(/食品業者登錄字號[:：]\s*([A-Za-z0-9-\s]+)/);
+  if (!match) return null;
+  const normalized = match[1].replace(/[^A-Za-z0-9-]/g, "").toUpperCase();
+  const digitsOnly = normalized.replace(/-/g, "");
+  return digitsOnly.length === 16 ? normalized : null;
+}
+
+function stripHtml(html) {
+  return String(html).replace(/<[^>]+>/g, " ");
 }
