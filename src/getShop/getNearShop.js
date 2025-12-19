@@ -132,6 +132,7 @@ export default async function getNearShop(
           result.score_total.push(score["total"]);
         } catch (e) {
           result.score_breakdown.push(NaN);
+          result.score_total.push(NaN);
         }
 
         try {
