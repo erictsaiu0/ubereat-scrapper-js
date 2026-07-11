@@ -4,6 +4,64 @@ import { Cookie } from "./Cookie.js";
 import { mkdirSync, writeFileSync } from "fs";
 import { Logger } from "../lib/Logger.js";
 
+const LOCATION_DELAY_MIN_MS = 3000;
+const LOCATION_DELAY_MAX_MS = 6000;
+const PAGE_DELAY_MIN_MS = 2500;
+const PAGE_DELAY_MAX_MS = 4000;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function randomDelay(minMs, maxMs) {
+  return minMs + Math.random() * (maxMs - minMs);
+}
+
+function headersToObject(headers) {
+  const result = {};
+  for (const [key, value] of headers.entries()) {
+    result[key] = value;
+  }
+  if (typeof headers.getSetCookie === "function") {
+    result["set-cookie"] = headers.getSetCookie();
+  }
+  return result;
+}
+
+async function dumpResponse(date, lat, lng, offset, label, response, rawBody, logger) {
+  try {
+    const debugPath = `../../../uber_data/shopLst/debug/${date}/`;
+    mkdirSync(debugPath, { recursive: true });
+    writeFileSync(
+      `${debugPath}/${lat}-${lng}-${label}-p-${offset}.json`,
+      JSON.stringify(
+        {
+          savedAt: new Date().toISOString(),
+          request: {
+            latitude: lat,
+            longitude: lng,
+            offset,
+          },
+          response: {
+            url: response.url,
+            status: response.status,
+            statusText: response.statusText,
+            ok: response.ok,
+            redirected: response.redirected,
+            type: response.type,
+            headers: headersToObject(response.headers),
+            body: rawBody,
+          },
+        },
+        null,
+        2,
+      ),
+    );
+  } catch (error) {
+    logger.error(error);
+  }
+}
+
 /**
  * get the restaurants nearby the given latitude and longitude
  * @param {string} date today's string
@@ -11,6 +69,7 @@ import { Logger } from "../lib/Logger.js";
  * @param {number} lng longitude
  * @param {boolean} saveJson is should we save a json file in this run
  * @param {Logger} logger the logger used to logging
+ * @param {boolean} debugResponse is should we save full response debug payloads
  */
 export default async function getNearShop(
   date,
@@ -18,6 +77,7 @@ export default async function getNearShop(
   lng = 121.5397518,
   saveJson,
   logger,
+  debugResponse = false,
 ) {
   let result = {
     storeUuid: [],
@@ -45,11 +105,14 @@ export default async function getNearShop(
 
   const fileNameStr = `../../../uber_data/shopLst/${date}/shopLst_${lat}_${lng}_${date}.csv`;
 
-  await new Promise((resolve) => setTimeout(resolve, Math.random() * 4000));
+  await sleep(randomDelay(LOCATION_DELAY_MIN_MS, LOCATION_DELAY_MAX_MS));
   let get = await fetch(
     "https://www.ubereats.com/tw/feed?diningMode=DELIVERY",
     true,
   );
+  if (debugResponse) {
+    await dumpResponse(date, lat, lng, 0, "feed", get, await get.text(), logger);
+  }
   cookie.updateCookies(get.headers.getSetCookie().join("; "));
 
   let roundCount = 0;
@@ -57,7 +120,7 @@ export default async function getNearShop(
   while (true) {
     roundCount += 1;
     // wait for a couple seconds
-    await new Promise((resolve) => setTimeout(resolve, Math.random() * 3000));
+    await sleep(randomDelay(PAGE_DELAY_MIN_MS, PAGE_DELAY_MAX_MS));
 
     // send the request
     let response = await sendReq(cookie, lat, lng, offset, PAGE_SIZE, logger);
@@ -65,7 +128,29 @@ export default async function getNearShop(
 
     // update cookies
     cookie.updateCookies(response.headers.getSetCookie().join("; "));
-    const data = await response.json();
+    const rawBody = await response.text();
+    if (debugResponse) {
+      await dumpResponse(date, lat, lng, offset, "getFeedV1", response, rawBody, logger);
+    }
+
+    let data;
+    try {
+      data = JSON.parse(rawBody);
+    } catch (error) {
+      logger.error(
+        `Failed to parse JSON response (${lat},${lng}) offset=${offset} status=${response.status}`,
+      );
+      logger.error(error);
+      break;
+    }
+
+    if (!response.ok || data["status"] === "failure") {
+      const message = data?.["data"]?.["message"] ?? data?.["message"] ?? "unknown";
+      logger.error(
+        `getFeedV1 failed (${lat},${lng}) offset=${offset} status=${response.status} message=${message}`,
+      );
+      break;
+    }
 
     // store json
     if (saveJson) {
@@ -82,7 +167,13 @@ export default async function getNearShop(
     }
 
     try {
-      let items = data["data"]["feedItems"];
+      let items = data?.["data"]?.["feedItems"];
+      if (!Array.isArray(items)) {
+        logger.error(
+          `Missing feedItems (${lat},${lng}) offset=${offset} status=${response.status} bodyStatus=${data?.["status"]}`,
+        );
+        break;
+      }
       let stores = [];
       for (const e of items)
         if (e.type === "REGULAR_STORE") stores.push(e["store"]);

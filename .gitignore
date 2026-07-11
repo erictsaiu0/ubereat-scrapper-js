@@ -4,3 +4,5 @@ node_modules/
 cookies/
 test-post.js
 *.log
+bun.lockb
+

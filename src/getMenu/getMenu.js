@@ -4,6 +4,19 @@ import { mkdirSync, writeFileSync } from "fs";
 import extractData from "./extractData.js";
 import { Logger } from "../lib/Logger.js";
 
+const FEED_DELAY_MIN_MS = 1500;
+const FEED_DELAY_MAX_MS = 2500;
+const MENU_DELAY_MIN_MS = 2000;
+const MENU_DELAY_MAX_MS = 3500;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function randomDelay(minMs, maxMs) {
+  return minMs + Math.random() * (maxMs - minMs);
+}
+
 /**
  *
  * @param {Cookie} cookie
@@ -23,6 +36,7 @@ export default async function getMenu(
   storeJson,
   logger,
 ) {
+  await sleep(randomDelay(FEED_DELAY_MIN_MS, FEED_DELAY_MAX_MS));
   let get = await fetch(
     "https://www.ubereats.com/tw/feed?diningMode=DELIVERY",
     // { verbose: true },
@@ -33,7 +47,7 @@ export default async function getMenu(
   let now = new Date();
 
   // fetch logic
-  await new Promise((resolve) => setTimeout(resolve, Math.random() * 5000));
+  await sleep(randomDelay(MENU_DELAY_MIN_MS, MENU_DELAY_MAX_MS));
   try {
     let response = await sendReqMenu(
       cookie,
