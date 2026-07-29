@@ -4,10 +4,10 @@ import { mkdirSync, writeFileSync } from "fs";
 import extractData from "./extractData.js";
 import { Logger } from "../lib/Logger.js";
 
-const FEED_DELAY_MIN_MS = 1500;
-const FEED_DELAY_MAX_MS = 2500;
-const MENU_DELAY_MIN_MS = 2000;
-const MENU_DELAY_MAX_MS = 3500;
+const FEED_DELAY_MIN_MS = 3000;
+const FEED_DELAY_MAX_MS = 5000;
+const MENU_DELAY_MIN_MS = 4000;
+const MENU_DELAY_MAX_MS = 6000;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -15,6 +15,28 @@ function sleep(ms) {
 
 function randomDelay(minMs, maxMs) {
   return minMs + Math.random() * (maxMs - minMs);
+}
+
+export async function initializeMenuSession(cookie) {
+  await sleep(randomDelay(FEED_DELAY_MIN_MS, FEED_DELAY_MAX_MS));
+
+  const response = await fetch(
+    "https://www.ubereats.com/tw/feed?diningMode=DELIVERY",
+  );
+
+  if (!response.ok) {
+    const error = new Error(
+      `Feed request failed with HTTP ${response.status}`,
+    );
+    error.code = response.status === 429
+      ? "UBER_RATE_LIMIT"
+      : "UBER_HTTP_ERROR";
+    error.httpStatus = response.status;
+    throw error;
+  }
+
+  cookie.updateCookies(response.headers.getSetCookie().join("; "));
+  cookie.setCookie("mcd_restaurant", "");
 }
 
 /**
@@ -36,14 +58,6 @@ export default async function getMenu(
   storeJson,
   logger,
 ) {
-  await sleep(randomDelay(FEED_DELAY_MIN_MS, FEED_DELAY_MAX_MS));
-  let get = await fetch(
-    "https://www.ubereats.com/tw/feed?diningMode=DELIVERY",
-    // { verbose: true },
-  );
-  cookie.updateCookies(get.headers.getSetCookie().join("; "));
-  cookie.setCookie("mcd_restaurant", "");
-
   let now = new Date();
 
   // fetch logic
@@ -67,6 +81,32 @@ export default async function getMenu(
         JSON.stringify(data),
       );
     }
+
+    const botDefense = data?.metadata?.botdefense;
+
+    if (botDefense?.state === "challenge") {
+      const error = new Error(
+        `Uber bot defense challenge (${botDefense.provider ?? "unknown"})`,
+      );
+      error.code = "UBER_BOT_CHALLENGE";
+      error.httpStatus = response.status;
+      error.responseData = data;
+      throw error;
+    }
+
+    if (!response.ok || data?.status === "failure") {
+      const error = new Error(
+        `getStoreV1 failed: HTTP ${response.status}, ` +
+          `status=${data?.status ?? "unknown"}`,
+      );
+      error.code = response.status === 429
+        ? "UBER_RATE_LIMIT"
+        : "UBER_API_ERROR";
+      error.httpStatus = response.status;
+      error.responseData = data;
+      throw error;
+    }
+
     return extractData(data.data, now, latitude, longitude, logger);
   } catch (e) {
     throw e;
